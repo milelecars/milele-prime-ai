@@ -13,6 +13,7 @@ export {
   SUMMARIZER_SYSTEM_PROMPT,
   TIGHTEN_DIRECTIVE,
   buildMentorSystem,
+  languageDirective,
 } from './prompts.js';
 export { LLMClient } from './client.js';
 export type { LLMClientConfig, MentorRequest, MentorResult } from './client.js';

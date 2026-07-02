@@ -9,6 +9,7 @@
  * guardrail, so it cannot override either.
  */
 import { childLogger } from '../lib/logger.js';
+import { DEFAULT_LANGUAGE, type Language } from '../i18n/index.js';
 import type { ClientMetrics } from '../metrics/types.js';
 import type { ClassifierVerdict } from './guardrail.js';
 import { buildMentorSystem, CLASSIFIER_SYSTEM_PROMPT, SUMMARIZER_SYSTEM_PROMPT } from './prompts.js';
@@ -41,6 +42,8 @@ export interface MentorRequest {
    * raw user text.
    */
   readonly systemAppendix?: string;
+  /** Language the mentor should reply in. Defaults to English. */
+  readonly language?: Language;
 }
 
 export interface MentorResult {
@@ -70,7 +73,7 @@ export class LLMClient {
 
   /** Generate a mentor turn. Returns the text plus token usage. */
   async mentorCompletion(req: MentorRequest): Promise<MentorResult> {
-    const base = buildMentorSystem(req.metrics);
+    const base = buildMentorSystem(req.metrics, req.language ?? DEFAULT_LANGUAGE);
     const system = req.systemAppendix
       ? `${base}\n\n## Conversation context\n${req.systemAppendix}`
       : base;
@@ -128,7 +131,7 @@ export class LLMClient {
   async countMentorRequest(req: MentorRequest): Promise<number> {
     return this.config.transport.countTokens({
       model: this.config.mentorModel,
-      system: buildMentorSystem(req.metrics),
+      system: buildMentorSystem(req.metrics, req.language ?? DEFAULT_LANGUAGE),
       messages: req.conversation,
     });
   }

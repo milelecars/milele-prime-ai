@@ -1,3 +1,4 @@
+import type { Language } from '../i18n/index.js';
 import type { AuditEvent, BindParams, UserRecord, UserRepository } from './repository.js';
 
 /**
@@ -25,14 +26,24 @@ export class InMemoryUserRepository implements UserRepository {
   }
 
   async bind(params: BindParams): Promise<UserRecord> {
+    const existing = this.byCrmId.get(params.crmClientId);
     const record: UserRecord = {
       crmClientId: params.crmClientId,
       telegramUserId: params.telegramUserId,
       boundAt: params.boundAt,
       consentAiMessaging: true,
+      // Preserve a previously chosen language across a re-bind.
+      language: existing?.language ?? null,
     };
     this.byCrmId.set(params.crmClientId, record);
     return record;
+  }
+
+  async setLanguage(crmClientId: string, language: Language): Promise<void> {
+    const existing = this.byCrmId.get(crmClientId);
+    if (existing) {
+      this.byCrmId.set(crmClientId, { ...existing, language });
+    }
   }
 
   async appendAudit(event: AuditEvent): Promise<void> {

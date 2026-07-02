@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { ExternalServiceError } from '../lib/errors.js';
+import { normalizeLanguage, type Language } from '../i18n/index.js';
 import type { AuditEvent, BindParams, UserRecord, UserRepository } from './repository.js';
 
 interface UserRow {
@@ -7,9 +8,10 @@ interface UserRow {
   telegram_user_id: number | null;
   consent_ai_messaging: boolean;
   bound_at: string | null;
+  language: string | null;
 }
 
-const USER_COLUMNS = 'crm_client_id, telegram_user_id, consent_ai_messaging, bound_at';
+const USER_COLUMNS = 'crm_client_id, telegram_user_id, consent_ai_messaging, bound_at, language';
 
 function toRecord(row: UserRow): UserRecord {
   return {
@@ -17,6 +19,8 @@ function toRecord(row: UserRow): UserRecord {
     telegramUserId: row.telegram_user_id,
     consentAiMessaging: row.consent_ai_messaging,
     boundAt: row.bound_at,
+    // Coerce an unrecognized/legacy value to null so callers fall back to default.
+    language: row.language ? normalizeLanguage(row.language) : null,
   };
 }
 
@@ -66,6 +70,16 @@ export class SupabaseUserRepository implements UserRepository {
       throw new ExternalServiceError('Failed to bind user', { cause: error?.message });
     }
     return toRecord(data);
+  }
+
+  async setLanguage(crmClientId: string, language: Language): Promise<void> {
+    const { error } = await this.db
+      .from('users')
+      .update({ language })
+      .eq('crm_client_id', crmClientId);
+    if (error) {
+      throw new ExternalServiceError('Failed to set user language', { cause: error.message });
+    }
   }
 
   async appendAudit(event: AuditEvent): Promise<void> {

@@ -7,6 +7,7 @@
  * 8 model call → 9 guardrail → 10 voice-out + logging.
  */
 import { UNBOUND_MESSAGE } from '../identity/index.js';
+import { DEFAULT_LANGUAGE, t, type Language } from '../i18n/index.js';
 import { childLogger } from '../lib/logger.js';
 import { toError } from '../lib/utils.js';
 import {
@@ -17,7 +18,7 @@ import {
   TIGHTEN_DIRECTIVE,
 } from '../llm/index.js';
 import { computeClientMetrics, gatherMetricsInput, type ClientMetrics } from '../metrics/index.js';
-import { HOLDING_MESSAGE, THROTTLE_MESSAGE } from '../ops/index.js';
+import { HOLDING_MESSAGE } from '../ops/index.js';
 import { bandForRatio, budgetRatio, capsForTier, estimateTokens } from './budget.js';
 import { detectEscalation } from './escalation.js';
 import { buildCooldownMessage, buildExitMessage } from './exit.js';
@@ -35,9 +36,6 @@ import type {
 } from './types.js';
 
 const log = childLogger('inbound');
-
-const HANDOFF_MESSAGE =
-  "Thanks for flagging this — I'm connecting you with a member of the Milele team who can help you directly. They'll follow up shortly.";
 
 function toChatMessage(m: StoredMessage): ChatMessage {
   return { role: m.direction === 'in' ? 'user' : 'assistant', content: m.content };
@@ -150,21 +148,23 @@ async function escalate(
   inboundTokens: number,
   band: BudgetBand,
   nowMs: number,
+  language: Language,
 ): Promise<InboundResult> {
+  const handoff = t(language).handoff;
   await deps.escalation.notify({ crmClientId: state.crmClientId, telegramUserId, reason, snippet });
-  await deps.telegram.sendText(telegramUserId, HANDOFF_MESSAGE);
+  await deps.telegram.sendText(telegramUserId, handoff);
   await deps.store.recordMessage(state.conversationId, {
     direction: 'out',
     contentType: 'text',
-    content: HANDOFF_MESSAGE,
-    tokenCount: estimateTokens(HANDOFF_MESSAGE),
+    content: handoff,
+    tokenCount: estimateTokens(handoff),
   });
   state.escalated = true;
-  state.tokenCount += inboundTokens + estimateTokens(HANDOFF_MESSAGE);
+  state.tokenCount += inboundTokens + estimateTokens(handoff);
   state.lastActivityAt = nowMs;
   await deps.store.updateSession(state);
   log.info({ crmClientId: state.crmClientId, reason }, 'Escalated to human handoff');
-  return makeResult('escalated', HANDOFF_MESSAGE, { band, escalationReason: reason });
+  return makeResult('escalated', handoff, { band, escalationReason: reason });
 }
 
 /** Run the full inbound pipeline for one message. */
@@ -189,10 +189,15 @@ export async function handleInbound(
   }
   const crmClientId = user.crmClientId;
 
+  // Resolve the client's chosen chat language (default English). Used for every
+  // deterministic message below and passed to the mentor for its own reply.
+  const lang: Language = user.language ?? DEFAULT_LANGUAGE;
+  const s = t(lang);
+
   // Per-user inbound rate limit — soft throttle, never a crash.
   if (deps.rateLimiter && !deps.rateLimiter.check(String(telegramUserId), nowMs)) {
-    await deps.telegram.sendText(telegramUserId, THROTTLE_MESSAGE);
-    return makeResult('throttled', THROTTLE_MESSAGE);
+    await deps.telegram.sendText(telegramUserId, s.throttle);
+    return makeResult('throttled', s.throttle);
   }
 
   // 2. VOICE IN — transcribe untrusted audio; degrade to "please type" on failure.
@@ -205,7 +210,7 @@ export async function handleInbound(
       text = await deps.stt.transcribe(input.content.audio, input.content.mime);
     } catch (err) {
       log.warn({ err: toError(err), crmClientId }, 'STT failed — degrading to text request');
-      const msg = "I couldn't make out that voice note — mind typing it instead?";
+      const msg = s.sttFailed;
       await deps.telegram.sendText(telegramUserId, msg);
       return makeResult('degraded', msg);
     }
@@ -237,7 +242,7 @@ export async function handleInbound(
     );
   } catch (err) {
     log.error({ err: toError(err), crmClientId }, 'Data load failed — degrading');
-    const msg = "I'm having trouble loading your account data right now — try me again in a few minutes.";
+    const msg = s.dataLoadFailed;
     await deps.telegram.sendText(telegramUserId, msg);
     return makeResult('degraded', msg);
   }
@@ -245,7 +250,7 @@ export async function handleInbound(
   // 3. SESSION
   const resolution = await resolveSession(deps, crmClientId, nowMs);
   if (resolution.kind === 'cooldown') {
-    const msg = buildCooldownMessage();
+    const msg = buildCooldownMessage(lang);
     await deps.telegram.sendText(telegramUserId, msg);
     return makeResult('cooldown', msg, { band: 'cap' });
   }
@@ -267,12 +272,12 @@ export async function handleInbound(
   // 4. ESCALATION (content triggers preempt the model).
   const escReason = detectEscalation(text);
   if (escReason) {
-    return escalate(deps, state, escReason, telegramUserId, text, inboundTokens, band, nowMs);
+    return escalate(deps, state, escReason, telegramUserId, text, inboundTokens, band, nowMs, lang);
   }
 
   // 4b. COST CEILING → early graceful exit for the rest of the day.
   if (deps.cost && (await deps.cost.isUserOverCeiling(crmClientId, client.accountTier))) {
-    const msg = buildExitMessage(state, metrics);
+    const msg = buildExitMessage(state, metrics, lang);
     await deps.telegram.sendText(telegramUserId, msg);
     await deps.store.recordMessage(state.conversationId, {
       direction: 'out',
@@ -288,7 +293,7 @@ export async function handleInbound(
 
   // 5. BUDGET CAP → graceful exit (no expensive model call).
   if (band === 'cap') {
-    const exitMsg = buildExitMessage(state, metrics);
+    const exitMsg = buildExitMessage(state, metrics, lang);
     await deps.telegram.sendText(telegramUserId, exitMsg);
     await deps.store.recordMessage(state.conversationId, {
       direction: 'out',
@@ -305,7 +310,7 @@ export async function handleInbound(
   }
 
   // 6. ROUTING — simple metric lookup answered straight from metrics, no LLM.
-  const lookup = tryLookup(text, metrics);
+  const lookup = tryLookup(text, metrics, lang);
   if (lookup) {
     return finishTurn(deps, state, {
       telegramUserId,
@@ -354,6 +359,7 @@ export async function handleInbound(
     const completion = await deps.llm.mentorCompletion({
       metrics,
       conversation,
+      language: lang,
       ...(systemAppendix ? { systemAppendix } : {}),
     });
     reply = completion.text;
@@ -367,7 +373,7 @@ export async function handleInbound(
     log.error({ err: toError(err), crmClientId }, 'LLM failed — degrading to template');
     return finishTurn(deps, state, {
       telegramUserId,
-      reply: buildDeterministicReport(metrics),
+      reply: buildDeterministicReport(metrics, lang),
       metrics,
       sentVoice,
       llmCalled: false,
@@ -387,7 +393,7 @@ export async function handleInbound(
     onTrip: (trip) => deps.users.appendAudit(guardrailAuditEvent(crmClientId, trip, reply)),
   });
   if (guard.tripped) {
-    reply = buildDeflection(metrics);
+    reply = buildDeflection(metrics, lang);
     guardrailTripped = true;
     state.guardrailTrips += 1;
   }

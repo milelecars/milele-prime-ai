@@ -3,12 +3,15 @@
  * {@link UserRepository}; production uses the Supabase-backed implementation,
  * tests use the in-memory one.
  */
+import type { Language } from '../i18n/index.js';
 
 export interface UserRecord {
   readonly crmClientId: string;
   readonly telegramUserId: number | null;
   readonly consentAiMessaging: boolean;
   readonly boundAt: string | null; // ISO-8601
+  /** Preferred chat language, or null when the user hasn't chosen one yet. */
+  readonly language?: Language | null;
 }
 
 export interface BindParams {
@@ -33,6 +36,8 @@ export interface UserRepository {
    * consent_ai_messaging=true. Upserts the user row. Returns the bound record.
    */
   bind(params: BindParams): Promise<UserRecord>;
+  /** Set (or change) a user's preferred chat language. */
+  setLanguage(crmClientId: string, language: Language): Promise<void>;
   /** Append an immutable audit-log event. */
   appendAudit(event: AuditEvent): Promise<void>;
 }

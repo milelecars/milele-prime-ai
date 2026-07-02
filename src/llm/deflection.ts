@@ -3,62 +3,85 @@
  * never predictions. `buildDeflection` redirects a market-call request back to
  * the client's exposure (chat substitution). `buildDeterministicReport` is the
  * numbers-only fallback the daily report uses when a generation is rejected.
+ *
+ * Both are localized to the client's chosen language (default English); numbers
+ * come pre-formatted from `metrics.display.*` and are never altered.
  */
 import { formatPercent } from '../metrics/format.js';
 import type { ClientMetrics } from '../metrics/types.js';
+import { DEFAULT_LANGUAGE, periodAdjective, periodPhrase, t, type Language } from '../i18n/index.js';
+
+/** Safe read of a preformatted display string (display is a string map). */
+function d(metrics: ClientMetrics, key: string): string {
+  return metrics.display[key] ?? '';
+}
 
 /**
  * A factual, educational deflection redirecting to the client's own exposure.
  * Uses only numbers present in `metrics`.
  */
-export function buildDeflection(metrics?: ClientMetrics): string {
-  const base =
-    "I can't make market calls, price predictions, or buy/sell/hold recommendations — that's not something I'll ever do.";
+export function buildDeflection(
+  metrics?: ClientMetrics,
+  language: Language = DEFAULT_LANGUAGE,
+): string {
+  const s = t(language);
 
   if (metrics && metrics.openRisk.openPositions > 0 && metrics.topSymbolShare > 0) {
     const topSymbol = metrics.mostTradedSymbols[0]?.symbol;
+    const pct = formatPercent(metrics.topSymbolShare);
     const exposure =
       topSymbol !== undefined
-        ? `${formatPercent(metrics.topSymbolShare)} of your current open risk is concentrated in ${topSymbol}`
-        : `${formatPercent(metrics.topSymbolShare)} of your current open risk sits in a single instrument`;
-    return (
-      `${base} What I can do is help you think about your own exposure: ${exposure}, ` +
-      `and your margin is using ${formatPercent(metrics.openRisk.marginUtilization)} of your equity. ` +
-      `Want to talk through how that sits against your account size?`
-    );
+        ? s.deflectionExposureFragSymbol({ pct, symbol: topSymbol })
+        : s.deflectionExposureFragGeneric({ pct });
+    return s.deflectionExposure({
+      exposure,
+      margin: formatPercent(metrics.openRisk.marginUtilization),
+    });
   }
 
   if (metrics && metrics.numTrades > 0) {
-    return (
-      `${base} What I can do is help you reflect on your own history — for example, your win rate this ` +
-      `${metrics.window.granularity === 'daily' ? 'day' : 'week'} was ${metrics.display.winRate} across ` +
-      `${metrics.numTrades} trades, with a net result of ${metrics.display.totalPnL}. ` +
-      `Want to dig into what's working and what isn't?`
-    );
+    return s.deflectionHistory({
+      period: periodPhrase(language, metrics.window.granularity),
+      winRate: d(metrics, 'winRate'),
+      n: metrics.numTrades,
+      pnl: d(metrics, 'totalPnL'),
+    });
   }
 
-  return `${base} What I can do is help you understand your own positions, risk, and habits. What would you like to look at?`;
+  return s.deflectionGeneric;
 }
 
 /**
  * Deterministic, numbers-only report assembled directly from computed metrics.
  * No LLM, no invented figures — every value comes from `metrics`.
  */
-export function buildDeterministicReport(metrics: ClientMetrics): string {
-  const period = metrics.window.granularity === 'daily' ? 'daily' : 'weekly';
+export function buildDeterministicReport(
+  metrics: ClientMetrics,
+  language: Language = DEFAULT_LANGUAGE,
+): string {
+  const s = t(language);
+  const period = periodAdjective(language, metrics.window.granularity);
   const lines: string[] = [
-    `Your ${period} summary (${metrics.window.from} → ${metrics.window.to})`,
+    s.report.title({ period, from: metrics.window.from, to: metrics.window.to }),
     '',
-    `Net P&L: ${metrics.display.totalPnL}`,
-    `Win rate: ${metrics.display.winRate} (${metrics.display.record})`,
-    `Best trade: ${metrics.display.bestTrade}`,
-    `Worst trade: ${metrics.display.worstTrade}`,
-    `Avg hold: ${metrics.display.averageHold}  |  Max drawdown: ${metrics.display.maxDrawdown} (${metrics.display.maxDrawdownPct})`,
-    `Open risk: ${metrics.display.openPositions} position(s), ${metrics.display.openPnL} unrealized, margin ${metrics.display.marginUtilization}`,
+    s.report.netPnl({ v: d(metrics, 'totalPnL') }),
+    s.report.winRate({ v: d(metrics, 'winRate'), record: d(metrics, 'record') }),
+    s.report.bestTrade({ v: d(metrics, 'bestTrade') }),
+    s.report.worstTrade({ v: d(metrics, 'worstTrade') }),
+    s.report.avgHoldDrawdown({
+      avgHold: d(metrics, 'averageHold'),
+      dd: d(metrics, 'maxDrawdown'),
+      ddPct: d(metrics, 'maxDrawdownPct'),
+    }),
+    s.report.openRisk({
+      n: d(metrics, 'openPositions'),
+      openPnL: d(metrics, 'openPnL'),
+      margin: d(metrics, 'marginUtilization'),
+    }),
   ];
 
   if (metrics.behavioralObservations.length > 0) {
-    lines.push('', 'What stood out:');
+    lines.push('', s.report.stoodOut);
     for (const o of metrics.behavioralObservations) lines.push(`• ${o}`);
   }
 

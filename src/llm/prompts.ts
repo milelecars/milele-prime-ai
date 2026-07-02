@@ -5,6 +5,12 @@
  * turns in the messages array, so it cannot override these instructions.
  */
 import type { ClientMetrics } from '../metrics/types.js';
+import {
+  DEFAULT_LANGUAGE,
+  languageEnglishName,
+  languageNative,
+  type Language,
+} from '../i18n/index.js';
 
 /** Persona + behavioral contract for the trading mentor. */
 export const MENTOR_SYSTEM_PROMPT = `You are the Milele Prime AI mentor — a warm, sharp, and encouraging trading coach.
@@ -85,11 +91,33 @@ function metricsContext(metrics: ClientMetrics): Record<string, unknown> {
 }
 
 /**
- * Build the full mentor system prompt for a client: persona + hard rule +
- * the client's computed numbers (the only numbers the model may use).
+ * Language directive appended to the mentor system prompt so the reply comes
+ * back in the client's chosen language. Numbers, symbols, and currency values
+ * must be preserved exactly (they were computed by the system). Returns an
+ * empty string for the default language (English) — no directive needed.
  */
-export function buildMentorSystem(metrics: ClientMetrics): string {
+export function languageDirective(language: Language): string {
+  if (language === DEFAULT_LANGUAGE) return '';
+  const english = languageEnglishName(language);
+  const native = languageNative(language);
   return [
+    '## Language',
+    `Write your entire reply to the client in ${english} (${native}). Use natural, native, conversational phrasing — not a word-for-word translation.`,
+    'Keep all numbers, percentages, currency amounts, dates, and instrument symbols exactly as given in the data. Do not translate or localize instrument symbols (e.g. XAUUSD, EURUSD).',
+    'Stay fully in character as the mentor, and keep every rule above — especially the hard rule — regardless of language.',
+  ].join('\n');
+}
+
+/**
+ * Build the full mentor system prompt for a client: persona + hard rule +
+ * the client's computed numbers (the only numbers the model may use) + an
+ * optional language directive.
+ */
+export function buildMentorSystem(
+  metrics: ClientMetrics,
+  language: Language = DEFAULT_LANGUAGE,
+): string {
+  const parts = [
     MENTOR_SYSTEM_PROMPT,
     GUARDRAIL_PROMPT,
     '## The client\'s data (the ONLY numbers you may use)',
@@ -97,5 +125,8 @@ export function buildMentorSystem(metrics: ClientMetrics): string {
     '```json',
     JSON.stringify(metricsContext(metrics), null, 2),
     '```',
-  ].join('\n\n');
+  ];
+  const directive = languageDirective(language);
+  if (directive) parts.push(directive);
+  return parts.join('\n\n');
 }

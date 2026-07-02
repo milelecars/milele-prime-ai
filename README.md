@@ -119,14 +119,16 @@ Never commit secrets. `.env` is git-ignored; `.env.example` documents the shape.
 ## Database
 
 Migrations live in `src/db/migrations/` (`0001_init.sql`, `0002_outbound.sql`,
-`0003_inbound_sessions.sql`). Apply them in order via either:
+`0003_inbound_sessions.sql`, `0004_user_language.sql`). Apply them in order via
+either:
 
 - **Supabase SQL editor** — paste and run each file, or
 - **psql** — `psql "$SUPABASE_DB_URL" -f src/db/migrations/0001_init.sql` (then `0002`, `0003`)
 
 Migrations are idempotent (safe to re-run). `0002` adds `report_date` +
 `tts_char_count` to `outbound_log` and a unique index enforcing one daily report
-per client+date; `0003` adds chat session-state columns to `conversations`.
+per client+date; `0003` adds chat session-state columns to `conversations`;
+`0004` adds `users.language` (per-user chat language preference).
 Tables created by `0001`:
 
 | Table           | Purpose                                                        |
@@ -352,6 +354,34 @@ Migration `0003` adds the session-state columns to `conversations`
 (`exchange_count`, `rolling_summary`, `guardrail_trips`, `escalated`,
 `cooldown_until`, …). Production wiring + the grammY text/voice handlers live in
 `inbound/runtime.ts`.
+
+## Multilingual chat (`src/i18n/`)
+
+The chat mentor talks to each client in their **chosen language** — English,
+اردو (Urdu), हिन्दी (Hindi), العربية (Arabic), Français, Español, or Português.
+
+- **Choice + storage** — after `/start` the bot greets the user and shows an
+  inline keyboard of the seven languages; the pick is persisted on
+  `users.language` (migration `0004`). `/language` re-opens the picker anytime.
+  A user with no stored preference defaults to English.
+- **The AI reply** — `buildMentorSystem(metrics, language)` appends a language
+  directive so Claude answers in the target language while keeping every number,
+  currency amount, and instrument symbol exactly as computed (the hard rule and
+  guardrail still apply in every language; the classifier backstop is
+  language-agnostic).
+- **Everything else the user sees** — the deterministic strings (welcome/bind
+  messages, throttle/holding/handoff, cooldown, graceful exit + recap, the
+  guardrail deflection, and the no-LLM metric lookups) are translated in
+  `i18n/strings.ts` and rendered via `t(lang)`. Numbers stay locale-neutral
+  (they come pre-formatted from `metrics.display.*`).
+- The user's `language` is loaded once in the inbound pipeline and threaded
+  through every send and the mentor call. Tested in `tests/i18n.test.ts`
+  (catalog completeness, code normalization, per-language deflection/lookup, and
+  the mentor directive).
+
+> Scope: this covers the two-way **chat**. The scheduled daily drop (text/PDF/
+> voice) is still English — `buildDeterministicReport` and `buildMentorSystem`
+> already accept a language, so localizing the outbound worker is a follow-up.
 
 ## Production hardening (`src/ops/`)
 

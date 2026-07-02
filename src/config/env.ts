@@ -69,7 +69,7 @@ const envSchema = z
     // Daily report (outbound)
     DAILY_VOICE_ENABLED: boolFromEnv(true),
     DAILY_REPORT_HOUR: z.coerce.number().int().min(0).max(23).default(7),
-    DAILY_REPORT_GRANULARITY: z.enum(['daily', 'weekly']).default('weekly'),
+    DAILY_REPORT_GRANULARITY: z.enum(['daily', 'weekly']).default('daily'),
 
     // Marketing campaigns (outbound)
     MARKETING_HOUR_LOCAL: z.coerce.number().int().min(0).max(23).default(10),
